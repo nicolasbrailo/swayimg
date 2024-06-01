@@ -365,7 +365,8 @@ void canvas_draw_image(struct pixmap* wnd, const struct image* img,
 }
 
 void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
-                      const struct info_line* lines, size_t lines_num)
+                      const struct info_line* lines, size_t lines_num,
+                      const struct block_background* bg)
 {
     size_t max_key_width = 0;
     const size_t height =
@@ -380,7 +381,7 @@ void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
     max_key_width += height / 2;
 
     // draw background box for info block
-    {
+    if (bg->enable) {
         size_t box_x=-1, box_y=-1, box_w=0, box_h=0;
         for (size_t i = 0; i < lines_num; ++i) {
             const struct text_surface* key = &lines[i].key;
@@ -429,28 +430,22 @@ void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
             }
         }
 
-#define NICO_COL 0xFF102099
-#define INFO_BLOCK_BORDER_COL 0xFFFF0069
-#define INFO_BLOCK_PADDING 25
-#define INFO_BLOCK_BORDER 3
+        // Add padding and draw with border color
+        box_x = (box_x < bg->padding_pt) ? 0 : box_x - bg->padding_pt;
+        box_y = (box_y < bg->padding_pt) ? 0 : box_y - bg->padding_pt;
+        box_w = min(box_w + bg->padding_pt, wnd->width);
+        box_h = min(box_h + bg->padding_pt, wnd->height);
 
-        // Apply border to info block background
-        box_x = (box_x < INFO_BLOCK_PADDING)? 0 : box_x - INFO_BLOCK_PADDING;
-        box_y = (box_y < INFO_BLOCK_PADDING)? 0 : box_y - INFO_BLOCK_PADDING;
-        box_w = min(box_w + INFO_BLOCK_PADDING, wnd->width); 
-        box_h = min(box_h + INFO_BLOCK_PADDING, wnd->height); 
+        pixmap_fill(wnd, box_x, box_y, box_x + box_w, box_y + box_h,
+                    bg->border_color);
 
-        pixmap_fill(wnd, box_x, box_y,
-                    box_x+box_w, box_y+box_h,
-                    INFO_BLOCK_BORDER_COL);
-
-        box_x = box_x + INFO_BLOCK_BORDER;
-        box_y = box_y + INFO_BLOCK_BORDER;
-        box_w = box_w - 3*INFO_BLOCK_BORDER;
-        box_h = box_h - 3*INFO_BLOCK_BORDER;
-        pixmap_fill(wnd, box_x, box_y,
-                    box_x+box_w, box_y+box_h,
-                    NICO_COL);
+        // Make box smaller by border size, redraw with real background color
+        box_x = box_x + bg->border_pt;
+        box_y = box_y + bg->border_pt;
+        printf("XXX %lu %lu\n", box_w, bg->border_pt);
+        box_w = box_w - bg->border_pt;
+        box_h = box_h - bg->border_pt;
+        pixmap_fill(wnd, box_x, box_y, box_x + box_w, box_y + box_h, bg->color);
     }
 
     // draw info block

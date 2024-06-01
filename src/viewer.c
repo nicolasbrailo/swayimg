@@ -335,7 +335,8 @@ void viewer_on_redraw(struct pixmap* window)
         if (lines_num) {
             const enum info_position pos = (enum info_position)i;
             const struct info_line* lines = info_lines(pos);
-            canvas_draw_text(window, pos, lines, lines_num);
+            const struct block_background* bg = info_get_background();
+            canvas_draw_text(window, pos, lines, lines_num, bg);
         }
     }
 

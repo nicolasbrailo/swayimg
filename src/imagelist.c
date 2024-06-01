@@ -447,7 +447,7 @@ static enum config_status load_config(const char* key, const char* value)
     return status;
 }
 
-void image_list_init(void)
+void image_list_init()
 {
     // register configuration loader
     config_add_loader(IMGLIST_CFG_SECTION, load_config);

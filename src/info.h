@@ -5,6 +5,9 @@
 #pragma once
 
 #include "font.h"
+#include "pixmap.h"
+
+#include <stddef.h>
 
 /** Info block position. */
 enum info_position {
@@ -20,6 +23,9 @@ struct info_line {
     struct text_surface key;
     struct text_surface value;
 };
+
+// fwddcl from canvas.h
+struct block_background;
 
 /**
  * Create info context.
@@ -54,6 +60,11 @@ void info_update(size_t frame_idx);
  */
 void info_set_status(const char* fmt, ...)
     __attribute__((format(printf, 1, 2)));
+
+/**
+ * Get the configured background for the info block
+ */
+const struct block_background* info_get_background();
 
 /**
  * Get number of lines in the specified block.

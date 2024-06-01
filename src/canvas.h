@@ -6,12 +6,24 @@
 
 #include "image.h"
 #include "info.h"
+#include "pixmap.h"
+
+#include <stdbool.h>
+#include <stddef.h>
 
 // Configuration parameters
 #define CANVAS_CFG_ANTIALIASING "antialiasing"
 #define CANVAS_CFG_SCALE        "scale"
 #define CANVAS_CFG_TRANSPARENCY "transparency"
 #define CANVAS_CFG_BACKGROUND   "background"
+
+struct block_background {
+    bool enable;
+    argb_t color;
+    argb_t border_color;
+    size_t padding_pt;
+    size_t border_pt;
+};
 
 /**
  * Initialize canvas context.
@@ -54,7 +66,8 @@ void canvas_draw_image(struct pixmap* wnd, const struct image* img,
  * @param lines_num total number of lines
  */
 void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
-                      const struct info_line* lines, size_t lines_num);
+                      const struct info_line* lines, size_t lines_num,
+                      const struct block_background* bg);
 
 /**
  * Print text block at the center of window.

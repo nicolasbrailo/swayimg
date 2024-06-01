@@ -72,6 +72,15 @@ shadow = #000000
 [info]
 # Mode on startup (off/brief/full)
 mode = full
+# Show solid background on info block (none/RGB, e.g. #112233)
+background_color = #993300
+# Add a border to the background info block (none/RGB, e.g. #112233)
+border_color = #335599
+# Border size
+border_pt = 5
+# Padding for info block text
+padding_pt = 10
+
 # Display scheme for the "full" mode: position = content
 full.topleft = name,format,filesize,imagesize,exif
 full.topright = index

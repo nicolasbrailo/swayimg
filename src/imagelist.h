@@ -39,7 +39,7 @@ enum list_jump {
 /**
  * Initialize the image list.
  */
-void image_list_init(void);
+void image_list_init();
 
 /**
  * Free the image list.

@@ -119,6 +119,7 @@ struct info_context {
     size_t scale;
     struct info_line fields[INFO_FIELDS_NUM];
     struct info_block blocks[MODES_NUM][INFO_POSITION_NUM];
+    struct block_background background;
 };
 static struct info_context ctx;
 
@@ -217,6 +218,51 @@ static enum config_status load_config(const char* key, const char* value)
         return cfgst_ok;
     }
 
+    if (strcmp(key, "background_color") == 0) {
+        if (strcmp(value, "none") == 0) {
+            ctx.background.enable = false;
+            return 0;
+        }
+
+        if (!config_to_color(value, &ctx.background.color)) {
+            ctx.background.enable = false;
+            return cfgst_invalid_value;
+        }
+
+        ctx.background.enable = true;
+        return cfgst_ok;
+    }
+
+    if (strcmp(key, "border_color") == 0) {
+        if (strcmp(value, "none") == 0) {
+            ctx.background.border_pt = 0;
+            return 0;
+        }
+
+        if (!config_to_color(value, &ctx.background.border_color)) {
+            return cfgst_invalid_value;
+        }
+        return cfgst_ok;
+    }
+
+    if (strcmp(key, "border_pt") == 0) {
+        long num = 0;
+        if (str_to_num(value, 0, &num, 0) && num > 0 && num < 1024) {
+            ctx.background.border_pt = num;
+            return cfgst_ok;
+        }
+        return cfgst_invalid_value;
+    }
+
+    if (strcmp(key, "padding_pt") == 0) {
+        long num = 0;
+        if (str_to_num(value, 0, &num, 0) && num > 0 && num < 1024) {
+            ctx.background.padding_pt = num;
+            return cfgst_ok;
+        }
+        return cfgst_invalid_value;
+    }
+
     // parse key (mode.position)
     if (str_split(key, '.', slices, 2) != 2) {
         return cfgst_invalid_key;
@@ -283,6 +329,11 @@ void info_create(void)
     SET_DEFAULT(info_mode_full, info_bottom_right, default_bottom_right);
     SET_DEFAULT(info_mode_brief, info_top_left, default_brief_top_left);
     SET_DEFAULT(info_mode_brief, info_bottom_right, default_bottom_right);
+    ctx.background.enable = false;
+    ctx.background.color = 0;
+    ctx.background.border_color = 0;
+    ctx.background.padding_pt = 0;
+    ctx.background.border_pt = 0;
 
     // register configuration loader
     config_add_loader(CONFIG_SECTION, load_config);
@@ -436,6 +487,11 @@ void info_set_status(const char* fmt, ...)
         update_field(buffer, surface);
         free(buffer);
     }
+}
+
+const struct block_background* info_get_background()
+{
+    return &ctx.background;
 }
 
 size_t info_height(enum info_position pos)
