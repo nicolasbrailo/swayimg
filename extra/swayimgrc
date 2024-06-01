@@ -52,6 +52,8 @@ loop = yes
 recursive = no
 # Open all files in the start directory (yes/no)
 all = yes
+# Source to retrieve slideshow images (local, www)
+source = www
 
 ################################################################################
 # Font configuration

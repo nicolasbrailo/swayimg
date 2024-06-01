@@ -58,6 +58,7 @@ webp = dependency('libwebp', required: get_option('webp'))
 webp_demux = dependency('libwebpdemux', required: get_option('webp'))
 # optional dependencies: other features
 exif = dependency('libexif', required: get_option('exif'))
+curl = dependency('libcurl', required: get_option('curl'))
 bash = dependency('bash-completion', required: get_option('bash'))
 # non-Linux (BSD specific)
 epoll = dependency('epoll-shim', required: false)
@@ -76,6 +77,7 @@ conf.set('HAVE_LIBRSVG', rsvg.found())
 conf.set('HAVE_LIBTIFF', tiff.found())
 conf.set('HAVE_LIBWEBP', webp.found() and webp_demux.found())
 conf.set('HAVE_LIBEXIF', exif.found())
+conf.set('HAVE_LIBCURL', curl.found())
 conf.set('HAVE_INOTIFY', cc.has_header('sys/inotify.h', dependencies: inotify))
 conf.set_quoted('APP_NAME', meson.project_name())
 conf.set_quoted('APP_VERSION', version)
@@ -216,6 +218,7 @@ executable(
     fontconfig,
     freetype,
     exif,
+    curl,
     # image support
     exr,
     gif,

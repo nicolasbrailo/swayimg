@@ -6,12 +6,18 @@
 
 #include "image.h"
 
+#include <stddef.h>
+#include <stdbool.h>
+
 // Configuration parameters
 #define IMGLIST_CFG_SECTION   "list"
 #define IMGLIST_CFG_ORDER     "order"
 #define IMGLIST_CFG_LOOP      "loop"
 #define IMGLIST_CFG_RECURSIVE "recursive"
 #define IMGLIST_CFG_ALL       "all"
+#define IMGLIST_SRC           "source"
+#define IMGLIST_SRC_LOCALFS   "localfs"
+#define IMGLIST_SRC_WWW       "www"
 
 /** Image entry. */
 struct image_entry {
