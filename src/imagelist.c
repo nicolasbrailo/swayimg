@@ -15,9 +15,6 @@
 #include <string.h>
 #include <curl/curl.h>
 
-#define TEST_IMG2 "/home/batman/Photos/ToTag/0518 London Eye/DSC_4790.JPG"
-#define TEST_IMG "/home/batman/Downloads/img.jpg"
-
 struct image_list {
   size_t index;
   struct image* current;
@@ -153,7 +150,7 @@ bool image_list_scan(const char** files, size_t num)
     (void) files;
     (void) num;
     printf("LOAD TEST IMG\n");
-    struct image* img = image_from_file(TEST_IMG);
+    struct image* img = image_from_file("/media/batman/pCloudBCK/pCloud/Fotos/2015/Holanda/KitKat/20151107.030117.DSC_1506.JPG");
     ctx.current = img;
     
     return true;
@@ -186,31 +183,53 @@ bool image_list_jump(enum list_jump jump)
       case jump_first_file: // fallthrough
       case jump_last_file: // fallthrough
       case jump_next_dir: // fallthrough
-      case jump_prev_dir:
-        return false;
+      case jump_prev_dir: // fallthrough
+          return false;
       case jump_next_file:
         {
-          snprintf(ctx.active_rq.download_fname, 255, "%ld_img.jpg", ++ctx.index);
-          printf("Created fname '%s' ...\n", ctx.active_rq.download_fname);
+          size_t maybe_new_idx = ctx.index + 1;
+          snprintf(ctx.active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx.www_cache, maybe_new_idx);
+          struct image* maybe_cached_img = image_from_file(ctx.active_rq.download_fname);
+          if (maybe_cached_img) {
+              fprintf(stderr, "Found cached '%s'\n", ctx.active_rq.download_fname);
+              ctx.index = maybe_new_idx;
+              ctx.current = maybe_cached_img;
+              return true;
+          }
+
           ctx.active_rq.fp = fopen(ctx.active_rq.download_fname, "wb");
-          printf("fp open '%s' ...\n", ctx.active_rq.download_fname);
           if (!ctx.active_rq.fp) {
-              printf("Can't open '%s' to download from remote...\n", ctx.active_rq.download_fname);
+              fprintf(stderr, "Can't open '%s' to download from remote...\n", ctx.active_rq.download_fname);
               return false;
             } else {
               printf("Will try to download '%s'\n", ctx.active_rq.download_fname);
               curl_easy_perform(ctx.curl_handle);
               printf("downl'd '%s' ...\n", ctx.active_rq.download_fname);
               fclose(ctx.active_rq.fp);
-              printf("img free '%s' ...\n", ctx.active_rq.download_fname);
               image_free(ctx.current);
-              printf("open file '%s' ...\n", ctx.active_rq.download_fname);
+              ctx.index = maybe_new_idx;
               ctx.current = image_from_file(ctx.active_rq.download_fname);
           }
         }
         return true;
-      case jump_prev_file:
+      case jump_prev_file: {
+          if (ctx.index == 0)  {
+            return false;
+          }
+          size_t maybe_prev_idx = ctx.index - 1;
+          snprintf(ctx.active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx.www_cache, maybe_prev_idx);
+          struct image* maybe_prev_img = image_from_file(ctx.active_rq.download_fname);
+          if (!maybe_prev_img) {
+              printf("No prev img %s\n", ctx.active_rq.download_fname);
+              return false;
+          }
+          printf("Found prev img %s\n", ctx.active_rq.download_fname);
+          image_free(ctx.current);
+          ctx.current = maybe_prev_img;
+          ctx.index = maybe_prev_idx;
+          return true;
         return true;
+      }
     }
     abort();
 }
