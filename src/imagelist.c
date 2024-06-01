@@ -8,16 +8,23 @@
 #include "config.h"
 #include "str.h"
 
+#include <sys/types.h>
+#include <dirent.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #include <curl/curl.h>
 
-#define WWW_URL "http://10.0.0.144:5000/get_image"
 #define TEST_IMG2 "/home/batman/Photos/ToTag/0518 London Eye/DSC_4790.JPG"
 #define TEST_IMG "/home/batman/Downloads/img.jpg"
 
 struct image_list {
   size_t index;
   struct image* current;
+  char* www_url;
+  char* www_cache;
+  size_t cache_limit;
+  size_t prefetch_n;
   CURL* curl_handle;
   struct {
       char download_fname[255];
@@ -28,6 +35,10 @@ struct image_list {
 static struct image_list ctx = {
     .index = 0,
     .current = NULL,
+    .www_url = NULL,
+    .www_cache = NULL,
+    .cache_limit = 10,
+    .prefetch_n = 5,
     .curl_handle = NULL,
     .active_rq = {
         .download_fname = {0},
@@ -40,27 +51,57 @@ static struct image_list ctx = {
  */
 static enum config_status load_config(const char* key, const char* value)
 {
-    (void)key;
-    (void)value;
-    return cfgst_ok;
+    if (strcmp(key, IMGLIST_SRC) == 0) {
+        if (strcmp(value, IMGLIST_SRC_WWW) == 0) {
+            return cfgst_ok;
+        }
+        return cfgst_invalid_value;
+    }
+
+    if (strcmp(key, IMGLIST_WWW_URL) == 0) {
+        ctx.www_url = strdup(value);
+        return cfgst_ok;
+    }
+
+    if (strcmp(key, IMGLIST_WWW_CACHE) == 0) {
+        ctx.www_cache = strdup(value);
+        return cfgst_ok;
+    }
+
+    if (strcmp(key, IMGLIST_WWW_CACHE_LIMIT) == 0) {
+        long num = 0;
+        if (str_to_num(value, 0, &num, 0) && num > 0) {
+            ctx.cache_limit = num;
+            return cfgst_ok;
+        }
+        return cfgst_invalid_value;
+    }
+
+    if (strcmp(key, IMGLIST_WWW_PREFETCH_N) == 0) {
+        long num = 0;
+        if (str_to_num(value, 0, &num, 0) && num > 0) {
+            ctx.prefetch_n = num;
+            return cfgst_ok;
+        }
+        return cfgst_invalid_value;
+    }
+
+    return cfgst_invalid_key;
 }
 
 static size_t write_data(void *curl_fp, size_t size, size_t nmemb, void *usr)
 {
-  printf("CURLOPT RECV %p\n", usr);
-  printf("CURLOPT RECV %p\n", curl_fp);
   struct image_list* ctx = usr;
-  printf("CURLOPT FNAME %s\n", ctx->active_rq.download_fname);
   size_t written = fwrite(curl_fp, size, nmemb, ctx->active_rq.fp);
   return written;
 }
 
 void image_list_init()
 {
-    if (ctx.curl_handle) {
-        fprintf(stderr, "Double init of image list requested\n");
-        abort();
-    }
+  if (ctx.curl_handle) {
+      fprintf(stderr, "Double init of image list requested\n");
+      abort();
+  }
 
   // register configuration loader
   config_add_loader(IMGLIST_CFG_SECTION, load_config);
@@ -68,12 +109,10 @@ void image_list_init()
   // TODO error handling
   curl_global_init(CURL_GLOBAL_ALL);
   ctx.curl_handle = curl_easy_init();
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_URL, WWW_URL);
   curl_easy_setopt(ctx.curl_handle, CURLOPT_VERBOSE, 0L);
   curl_easy_setopt(ctx.curl_handle, CURLOPT_NOPROGRESS, 1L);
   curl_easy_setopt(ctx.curl_handle, CURLOPT_WRITEFUNCTION, write_data);
   curl_easy_setopt(ctx.curl_handle, CURLOPT_WRITEDATA, &ctx);
-  printf("CURLOPT WRITEDATA %p\n", (void*)&ctx);
 }
 
 void image_list_free(void)
@@ -81,12 +120,36 @@ void image_list_free(void)
   image_free(ctx.current);
   curl_easy_cleanup(ctx.curl_handle);
   curl_global_cleanup();
+  free(ctx.www_url);
   ctx.curl_handle = NULL;
   ctx.curl_handle = NULL;
 }
 
 bool image_list_scan(const char** files, size_t num)
 {
+  if (!ctx.www_cache) {
+      fprintf(stderr, "Missing www_cache config entry; can't use www-source without cache location\n");
+      abort();
+  }
+
+  if (!ctx.www_url) {
+      fprintf(stderr, "Missing www_url config entry; can't use www-source without URL\n");
+      abort();
+  }
+
+  {
+      DIR* dirp = opendir(ctx.www_cache);
+      if (!dirp) {
+          fprintf(stderr, "Can't open www_cache directory '%s'\n", ctx.www_cache);
+          perror("Can't open www_cache directory");
+          abort();
+      }
+      closedir(dirp);
+  }
+
+  // TODO error handling
+  curl_easy_setopt(ctx.curl_handle, CURLOPT_URL, ctx.www_url);
+
     (void) files;
     (void) num;
     printf("LOAD TEST IMG\n");

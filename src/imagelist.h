@@ -15,9 +15,14 @@
 #define IMGLIST_CFG_LOOP      "loop"
 #define IMGLIST_CFG_RECURSIVE "recursive"
 #define IMGLIST_CFG_ALL       "all"
-#define IMGLIST_SRC           "source"
-#define IMGLIST_SRC_LOCALFS   "localfs"
-#define IMGLIST_SRC_WWW       "www"
+
+#define IMGLIST_SRC             "source"
+#define IMGLIST_SRC_LOCALFS     "localfs"
+#define IMGLIST_SRC_WWW         "www"
+#define IMGLIST_WWW_URL         "www_url"
+#define IMGLIST_WWW_CACHE       "www_cache"
+#define IMGLIST_WWW_CACHE_LIMIT "www_cache_limit"
+#define IMGLIST_WWW_PREFETCH_N  "www_prefetch_n"
 
 /** Image entry. */
 struct image_entry {
