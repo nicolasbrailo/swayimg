@@ -9,11 +9,46 @@
 #include "str.h"
 
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <curl/curl.h>
+
+
+static void clean_cache(const char *path) {
+    DIR *dirp = opendir(path);
+    if (!dirp) {
+        return;
+    }
+
+    const size_t path_len = strlen(path);
+    struct dirent *dent;
+    while ((dent = readdir(dirp))) {
+        if ((strcmp(dent->d_name, ".") == 0) || (strcmp(dent->d_name, "..") == 0)) {
+            continue;
+        }
+
+        const size_t fpath_len = path_len + strlen(dent->d_name) + 2; // $BASE/$FNAME\0
+        char *fpath = malloc(fpath_len);
+        snprintf(fpath, fpath_len, "%s/%s", path, dent->d_name);
+        struct stat statbuf;
+        if (stat(fpath, &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                fprintf(stderr, "Found unexpected directory '%s' in cache path '%s'\n", fpath, path);
+            } else {
+                if (unlink(fpath) != 0) {
+                    fprintf(stderr, "Failed to clean cache file '%s'\n", fpath);
+                    perror("Can't delete file");
+                }
+            }
+        }
+        free(fpath);
+    }
+}
+
 
 struct image_list {
   size_t index;
@@ -114,16 +149,20 @@ void image_list_init()
 
 void image_list_free(void)
 {
+  clean_cache(ctx.www_cache);
   image_free(ctx.current);
   curl_easy_cleanup(ctx.curl_handle);
   curl_global_cleanup();
   free(ctx.www_url);
+  free(ctx.www_cache);
   ctx.curl_handle = NULL;
   ctx.curl_handle = NULL;
 }
 
 bool image_list_scan(const char** files, size_t num)
 {
+  clean_cache(ctx.www_cache);
+
   if (!ctx.www_cache) {
       fprintf(stderr, "Missing www_cache config entry; can't use www-source without cache location\n");
       abort();
