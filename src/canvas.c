@@ -379,6 +379,80 @@ void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
     }
     max_key_width += height / 2;
 
+    // draw background box for info block
+    {
+        size_t box_x=-1, box_y=-1, box_w=0, box_h=0;
+        for (size_t i = 0; i < lines_num; ++i) {
+            const struct text_surface* key = &lines[i].key;
+            const struct text_surface* value = &lines[i].value;
+            size_t y = 0;
+            size_t x_val = 0;
+
+            // Calculate background box Y coords
+            switch (pos) {
+                case info_top_left: // fallthrough
+                case info_top_right:
+                    y = TEXT_PADDING + i * height;
+                    box_y = min(box_y, y);
+                    box_h = max(box_h, y);
+                    break;
+                case info_bottom_right: // fallthrough
+                case info_bottom_left:
+                    y = wnd->height - TEXT_PADDING - height * lines_num + i * height;
+                    box_y = min(box_y, y);
+                    box_h = max(box_h, y);
+                    break;
+            }
+
+            // Calculate background box X coords
+            switch (pos) {
+                case info_top_right: // fallthrough
+                case info_bottom_right:
+                    box_w = max(box_w, value->width);
+                    x_val = wnd->width - TEXT_PADDING - value->width;
+                    if (key->data) {
+                        x_val = x_val - key->width - TEXT_PADDING;
+                    }
+                    box_x = min(box_x, x_val);
+                    break;
+                case info_top_left: // fallthrough
+                case info_bottom_left:
+                    if (key->data) {
+                        x_val = TEXT_PADDING + max_key_width;
+                        box_w = max(box_w, value->width + max_key_width);
+                    } else {
+                        x_val = TEXT_PADDING;
+                        box_w = max(box_w, value->width);
+                    }
+                    box_x = min(box_x, x_val);
+                    break;
+            }
+        }
+
+#define NICO_COL 0xFF102099
+#define INFO_BLOCK_BORDER_COL 0xFFFF0069
+#define INFO_BLOCK_PADDING 25
+#define INFO_BLOCK_BORDER 3
+
+        // Apply border to info block background
+        box_x = (box_x < INFO_BLOCK_PADDING)? 0 : box_x - INFO_BLOCK_PADDING;
+        box_y = (box_y < INFO_BLOCK_PADDING)? 0 : box_y - INFO_BLOCK_PADDING;
+        box_w = min(box_w + INFO_BLOCK_PADDING, wnd->width); 
+        box_h = min(box_h + INFO_BLOCK_PADDING, wnd->height); 
+
+        pixmap_fill(wnd, box_x, box_y,
+                    box_x+box_w, box_y+box_h,
+                    INFO_BLOCK_BORDER_COL);
+
+        box_x = box_x + INFO_BLOCK_BORDER;
+        box_y = box_y + INFO_BLOCK_BORDER;
+        box_w = box_w - 3*INFO_BLOCK_BORDER;
+        box_h = box_h - 3*INFO_BLOCK_BORDER;
+        pixmap_fill(wnd, box_x, box_y,
+                    box_x+box_w, box_y+box_h,
+                    NICO_COL);
+    }
+
     // draw info block
     for (size_t i = 0; i < lines_num; ++i) {
         const struct text_surface* key = &lines[i].key;
