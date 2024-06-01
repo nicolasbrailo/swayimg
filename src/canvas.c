@@ -442,9 +442,8 @@ void canvas_draw_text(struct pixmap* wnd, enum info_position pos,
         // Make box smaller by border size, redraw with real background color
         box_x = box_x + bg->border_pt;
         box_y = box_y + bg->border_pt;
-        printf("XXX %lu %lu\n", box_w, bg->border_pt);
-        box_w = box_w - bg->border_pt;
-        box_h = box_h - bg->border_pt;
+        box_w = box_w - bg->border_pt - TEXT_PADDING;
+        box_h = box_h - bg->border_pt - TEXT_PADDING;
         pixmap_fill(wnd, box_x, box_y, box_x + box_w, box_y + box_h, bg->color);
     }
 
