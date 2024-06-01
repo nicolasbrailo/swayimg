@@ -98,7 +98,7 @@ bool image_list_scan(const char** files, size_t num)
 
 size_t image_list_size(void)
 {
-    return 1;
+    return -1;
 }
 
 struct image_entry image_list_current(void)
