@@ -51,9 +51,9 @@ static void clean_cache(const char *path) {
 
 
 
+#include <pthread.h>
 #if 0
 
-#include <pthread.h>
 #include <semaphore.h>
 
 struct preloader_ctx {
@@ -61,7 +61,6 @@ struct preloader_ctx {
     sem_t prefetched_count;
     size_t prefetched_count_tgt;
     pthread_cond_t condvar;
-    pthread_mutex_t cv_mut;
 };
 
 static void* preloader_thread(void* usr)
@@ -188,6 +187,7 @@ void* preloader_get(struct preloader_ctx* pctx)
 
 struct image_list {
     char* www_url;
+    bool www_url_is_set;
     char* www_cache;
 
     CURL* curl_handle;
@@ -197,9 +197,12 @@ struct image_list {
     } active_rq;
 
     size_t index;
-    struct image* current;
+    struct image* no_img;
     size_t cache_limit;
 
+    pthread_t thread;
+
+    pthread_mutex_t cv_mut;
     struct image** image_cache;
     size_t image_cache_size;
     size_t prefetch_n;
@@ -209,8 +212,9 @@ struct image_list {
 
 static struct image_list ctx = {
     .index = 0,
-    .current = NULL,
+    .no_img = NULL,
     .www_url = NULL,
+    .www_url_is_set = false,
     .www_cache = NULL,
     .cache_limit = 10,
     .curl_handle = NULL,
@@ -221,10 +225,11 @@ static struct image_list ctx = {
 
     .image_cache = NULL,
     .image_cache_size = 0,
-    .prefetch_n = 0,
+    .prefetch_n = 3,
     .image_cache_r = 0,
     .image_cache_w = 0,
 };
+
 
 /**
  * Custom section loader, see `config_loader` for details.
@@ -276,6 +281,81 @@ static size_t write_data(void *curl_fp, size_t size, size_t nmemb, void *usr)
   return written;
 }
 
+static void* downloader_thread(void* usr)
+{
+    struct image_list* ctx = usr;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    CURL* curl_handle = curl_easy_init();
+    curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
+    curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_data);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, ctx);
+
+    // Wait for cfg
+    bool cfg_ready = false;
+    while (!cfg_ready) {
+      pthread_mutex_lock(&ctx->cv_mut);
+      cfg_ready = ctx->www_url_is_set;
+      pthread_mutex_unlock(&ctx->cv_mut);
+      // TODO use a cv
+    }
+
+    // TODO error handling
+    curl_easy_setopt(curl_handle, CURLOPT_URL, ctx->www_url);
+
+    while (true) {
+        size_t cnt = (ctx->image_cache_w >= ctx->image_cache_r)?
+                        ctx->image_cache_w - ctx->image_cache_r :
+                        ctx->image_cache_w + ctx->image_cache_size - ctx->image_cache_r;
+
+        for (size_t i=cnt; i < ctx->prefetch_n; ++i) {
+            size_t maybe_new_idx = ctx->index + 1;
+            snprintf(ctx->active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx->www_cache, maybe_new_idx);
+            ctx->active_rq.fp = fopen(ctx->active_rq.download_fname, "wb");
+            if (!ctx->active_rq.fp) {
+                fprintf(stderr, "Can't open '%s' to download from remote...\n", ctx->active_rq.download_fname);
+                return false;
+              }
+
+              CURLcode ret = curl_easy_perform(curl_handle);
+              if (ret != CURLE_OK) {
+                  printf("Fail to download from %s: %s\n", ctx->www_url, curl_easy_strerror(ret));
+                  abort();
+                  // TODO continue;
+              }
+
+              fclose(ctx->active_rq.fp);
+              ctx->index = maybe_new_idx;
+              struct image* img = image_from_file(ctx->active_rq.download_fname);
+              if (!img) {
+                  printf("Fail to create img %s\n", ctx->active_rq.download_fname);
+                  abort();
+                  // TODO continue;
+              }
+
+              printf("Created image wIdx=%lu %p '%s'\n", ctx->image_cache_w, (void*)img, ctx->active_rq.download_fname);
+              pthread_mutex_lock(&ctx->cv_mut);
+              struct image* old_img = ctx->image_cache[ctx->image_cache_w];
+              ctx->image_cache[ctx->image_cache_w] = img;
+              ctx->image_cache_w = (ctx->image_cache_w + 1) % ctx->image_cache_size;
+              pthread_mutex_unlock(&ctx->cv_mut);
+
+              if (old_img) {
+                printf("Expiring cached image from cache[%lu] = %p\n", ctx->image_cache_w, (void*)ctx->image_cache[ctx->image_cache_w]);
+                image_free(old_img);
+              }
+        }
+
+        // TODO use a CV
+        sleep(1);
+    }
+
+    return NULL;
+}
+
+
+
 void image_list_init()
 {
   if (ctx.curl_handle) {
@@ -286,26 +366,24 @@ void image_list_init()
   // register configuration loader
   config_add_loader(IMGLIST_CFG_SECTION, load_config);
 
-  // TODO error handling
-  curl_global_init(CURL_GLOBAL_ALL);
-  ctx.curl_handle = curl_easy_init();
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_VERBOSE, 0L);
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_NOPROGRESS, 1L);
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_WRITEFUNCTION, write_data);
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_WRITEDATA, &ctx);
-
   ctx.image_cache_size = 10;
-  ctx.prefetch_n = 5;
+  ctx.prefetch_n = 3;
   ctx.image_cache_r = 0;
   ctx.image_cache_w = 0;
   ctx.image_cache = malloc(sizeof(void*) * ctx.image_cache_size);
   memset(ctx.image_cache, 0, sizeof(void*) * ctx.image_cache_size);
+
+  if (pthread_create(&ctx.thread, NULL, downloader_thread, &ctx) != 0) {
+      perror("Fail pthread_create");
+      abort();
+  }
 }
 
 void image_list_free(void)
 {
+    // TODO Join threasd
   clean_cache(ctx.www_cache);
-  image_free(ctx.current);
+  image_free(ctx.no_img);
   curl_easy_cleanup(ctx.curl_handle);
   curl_global_cleanup();
   free(ctx.www_url);
@@ -338,15 +416,16 @@ bool image_list_scan(const char** files, size_t num)
       closedir(dirp);
   }
 
-  // TODO error handling
-  curl_easy_setopt(ctx.curl_handle, CURLOPT_URL, ctx.www_url);
-
     (void) files;
     (void) num;
     printf("LOAD TEST IMG\n");
     struct image* img = image_from_file("/media/batman/pCloudBCK/pCloud/Fotos/2015/Holanda/KitKat/20151107.030117.DSC_1506.JPG");
-    ctx.current = img;
-    
+    ctx.no_img = img;
+
+  pthread_mutex_lock(&ctx.cv_mut);
+  ctx.www_url_is_set = true;
+  pthread_mutex_unlock(&ctx.cv_mut);
+
     return true;
 }
 
@@ -357,7 +436,15 @@ size_t image_list_size(void)
 
 struct image_entry image_list_current(void)
 {
-    struct image_entry entry = { .index = ctx.index, .image = ctx.current };
+    pthread_mutex_lock(&ctx.cv_mut);
+    struct image_entry entry = {
+        .index = ctx.index,
+        .image = ctx.image_cache[ctx.image_cache_r],
+    };
+    if (!entry.image) {
+        entry.image = ctx.no_img;
+    }
+    pthread_mutex_unlock(&ctx.cv_mut);
     return entry;
 }
 
@@ -381,55 +468,33 @@ bool image_list_jump(enum list_jump jump)
           return false;
       case jump_next_file:
         {
-            size_t cnt = (ctx.image_cache_w >= ctx.image_cache_r)?
-                            ctx.image_cache_w - ctx.image_cache_r :
-                            ctx.image_cache_w + ctx.image_cache_size - ctx.image_cache_r;
-            printf("There are %lu images cached, I need %lu\n", cnt, ctx.prefetch_n);
-
-            for (size_t i=cnt; i < ctx.prefetch_n; ++i) {
-                size_t maybe_new_idx = ctx.index + 1;
-                snprintf(ctx.active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx.www_cache, maybe_new_idx);
-                ctx.active_rq.fp = fopen(ctx.active_rq.download_fname, "wb");
-                if (!ctx.active_rq.fp) {
-                    fprintf(stderr, "Can't open '%s' to download from remote...\n", ctx.active_rq.download_fname);
-                    return false;
-                  }
-                  printf("Will try to download '%s'\n", ctx.active_rq.download_fname);
-                  curl_easy_perform(ctx.curl_handle);
-                  printf("downl'd '%s' ...\n", ctx.active_rq.download_fname);
-                  fclose(ctx.active_rq.fp);
-                  ctx.index = maybe_new_idx;
-                  struct image* img = image_from_file(ctx.active_rq.download_fname);
-                    if (ctx.image_cache[ctx.image_cache_w]) {
-                      printf("Expiring cached image from windex %lu\n", ctx.image_cache_w);
-                      image_free(ctx.current);
-                    }
-                  ctx.image_cache[ctx.image_cache_w] = img;
-                  printf("Stored '%s' to write index %lu\n", ctx.active_rq.download_fname, ctx.image_cache_w);
-                  ctx.image_cache_w = (ctx.image_cache_w + 1) % ctx.image_cache_size;
+            bool can_move = false;
+            pthread_mutex_lock(&ctx.cv_mut);
+            size_t next_idx = (ctx.image_cache_r + 1) % ctx.image_cache_size;
+            if (ctx.image_cache_w == ctx.image_cache_r) {
+                printf("No images, cache empty\n");
+            } else if (!ctx.image_cache[next_idx]) {
+                printf("Fail reading NEXT file: cache R %lu=%p, W=%lu\n", ctx.image_cache_r, (void*)ctx.image_cache[ctx.image_cache_r], ctx.image_cache_w);
+            } else {
+                printf("NEXT file: Set ptr to next image from cache R idx %lu = %p\n",ctx.image_cache_r, (void*)ctx.image_cache[ctx.image_cache_r]);
+                ctx.image_cache_r = next_idx;
+                can_move = true;
             }
-
-            ctx.current = ctx.image_cache[ctx.image_cache_r];
-            printf("Read image from cache R idx %lu\n",ctx.image_cache_r);
-            ctx.image_cache_r = (ctx.image_cache_r + 1) % ctx.image_cache_size;
+            pthread_mutex_unlock(&ctx.cv_mut);
+            return can_move;
         }
         return true;
       case jump_prev_file: {
-          if (ctx.index == 0)  {
+        pthread_mutex_lock(&ctx.cv_mut);
+        size_t maybe_prev = ctx.image_cache_r == 0? ctx.image_cache_size -1 : ctx.image_cache_r - 1;
+        if (maybe_prev == ctx.image_cache_w || !ctx.image_cache[maybe_prev]) {
+            printf("No more history\n");
+            pthread_mutex_unlock(&ctx.cv_mut);
             return false;
-          }
-          size_t maybe_prev_idx = ctx.index - 1;
-          snprintf(ctx.active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx.www_cache, maybe_prev_idx);
-          struct image* maybe_prev_img = image_from_file(ctx.active_rq.download_fname);
-          if (!maybe_prev_img) {
-              printf("No prev img %s\n", ctx.active_rq.download_fname);
-              return false;
-          }
-          printf("Found prev img %s\n", ctx.active_rq.download_fname);
-          image_free(ctx.current);
-          ctx.current = maybe_prev_img;
-          ctx.index = maybe_prev_idx;
-          return true;
+        }
+        ctx.image_cache_r = maybe_prev;
+        printf("Prev file: Read image from cache R idx %lu = (void*)%p\n",ctx.image_cache_r, (void*)ctx.image_cache[ctx.image_cache_r]);
+        pthread_mutex_unlock(&ctx.cv_mut);
         return true;
       }
     }

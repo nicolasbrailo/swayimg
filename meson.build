@@ -6,7 +6,8 @@ project(
   default_options: [
     'c_std=c99',
     'warning_level=3',
-    'optimization=2',
+    'optimization=0',
+    'g=gdb',
     'werror=true',
   ],
   license: 'MIT',
@@ -17,7 +18,7 @@ project(
 add_project_arguments(
   [
     '-D_POSIX_C_SOURCE=200809',
-    '-Wsign-compare'
+    '-Wsign-compare',
   ],
   language: 'c',
 )
