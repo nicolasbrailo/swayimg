@@ -41,6 +41,9 @@ struct image_info {
  */
 struct image* image_from_file(const char* file);
 
+struct image* image_create(const char* path, const uint8_t* data,
+                                  size_t size);
+
 /**
  * Load image from stdin data.
  * @return image context or NULL on errors

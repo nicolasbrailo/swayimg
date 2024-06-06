@@ -45,12 +45,11 @@ void image_prefetcher_init(struct image_prefetcher_ctx* ctx, downloader_cb cb,
     ctx->downloader_impl = cb;
     ctx->downloader_impl_usr = downloader_impl_usr;
 
-    ctx->image_cache_size = 10; // TODO
+    ctx->image_cache_size = 0;
     ctx->image_cache_r = 0;
     ctx->image_cache_w = 0;
-    ctx->prefetch_n = 3; // TODO
-    ctx->image_cache = malloc(sizeof(void*) * ctx->image_cache_size);
-    memset(ctx->image_cache, 0, sizeof(void*) * ctx->image_cache_size);
+    ctx->prefetch_n = 0;
+    ctx->image_cache = NULL;
 
     if (ctx->thread) {
         fprintf(stderr, "Double init of image prefetcher requested\n");
@@ -69,18 +68,55 @@ void image_prefetcher_init(struct image_prefetcher_ctx* ctx, downloader_cb cb,
 }
 
 /**
- * Prefetcher is ready to start; this implies the downloader is also configured
+ * Mark prefetcher as ready to start; this implies the downloader is also configured
  * and ready to be invoked.
+ *
+ * @param cache_size: maximum number of images to cache, before expiring old ones
+ * @param prefetch_n: number of images to prefetch ahead of latest requested by user
  */
-void image_prefetcher_start(struct image_prefetcher_ctx* ctx)
+void image_prefetcher_start(struct image_prefetcher_ctx* ctx, size_t cache_size, size_t prefetch_n)
 {
+    ctx->image_cache_size = cache_size;
+    ctx->prefetch_n = prefetch_n;
+
+    if (ctx->image_cache_r != 0 || ctx->image_cache_w != 0) {
+        fprintf(stderr, "BUG: image_prefetcher used before start\n");
+        abort();
+    }
+
+    if (ctx->image_cache_size == 0) {
+        fprintf(stderr, "Can't use prefetcher with cache size = 0\n");
+        abort();
+    }
+
+    if (ctx->prefetch_n == 0) {
+        fprintf(stderr, "Can't use prefetcher with prefetch count = 0\n");
+        abort();
+    }
+
+    if (ctx->prefetch_n > ctx->image_cache_size) {
+        fprintf(stderr,
+                "Prefetcher has prefetch count = %lu and max cache size = %lu. "
+                "Will set max prefetch to cache size.\n",
+                ctx->prefetch_n, ctx->image_cache_size);
+        ctx->prefetch_n = ctx->image_cache_size;
+        abort();
+    }
+
+    ctx->image_cache = malloc(sizeof(void*) * ctx->image_cache_size);
+    if (!ctx->image_cache) {
+        fprintf(stderr, "Bad alloc, can't create prefetcher\n");
+        abort();
+    }
+
+    memset(ctx->image_cache, 0, sizeof(void*) * ctx->image_cache_size);
+
     if (pthread_create(&ctx->thread, NULL, image_prefetcher_thread, ctx) != 0) {
         perror("pthread_create");
         abort();
     }
 }
 
-#include <errno.h>
 void image_prefetcher_free(struct image_prefetcher_ctx* ctx)
 {
     if (!ctx) {
@@ -135,6 +171,7 @@ void* image_prefetcher_thread(void* usr)
             // Critical section: update buffer
             pthread_mutex_lock(&ctx->cv_mut);
             struct image* old_img = ctx->image_cache[ctx->image_cache_w];
+            size_t old_w_pos = ctx->image_cache_w;
             ctx->image_cache[ctx->image_cache_w] = img;
             ctx->image_cache_w =
                 (ctx->image_cache_w + 1) % ctx->image_cache_size;
@@ -142,8 +179,7 @@ void* image_prefetcher_thread(void* usr)
 
             // If the old position in the ringbuffer had an image, relase it
             if (old_img) {
-                printf("Expiring cached image [%lu] = %p\n", ctx->image_cache_w,
-                       (void*)old_img);
+                printf("Expire cached image w_old=%lu [%p]\n", old_w_pos, (void*)old_img);
                 image_free(old_img);
             }
 
@@ -221,6 +257,14 @@ image_prefetcher_jump_prev(struct image_prefetcher_ctx* ctx)
     return ctx->image_cache[maybe_prev];
 }
 
+
+
+
+
+
+
+
+
 #include "buildcfg.h"
 #include "config.h"
 #include "imagelist.h"
@@ -228,7 +272,6 @@ image_prefetcher_jump_prev(struct image_prefetcher_ctx* ctx)
 
 #include <curl/curl.h>
 #include <dirent.h>
-#include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,7 +317,7 @@ static void clean_cache(const char* path)
 
 struct image_list {
     char* www_url;
-    char* www_cache;
+    char* www_cache_dir;
     struct image_prefetcher_ctx image_prefetcher;
     size_t index;
     struct image* no_img;
@@ -286,7 +329,7 @@ static struct image_list ctx = {
     .no_img = NULL,
     .current = NULL,
     .www_url = NULL,
-    .www_cache = NULL,
+    .www_cache_dir = NULL,
     .image_prefetcher = {
         .downloader_impl = NULL,
         .downloader_impl_usr = NULL,
@@ -316,7 +359,7 @@ static enum config_status load_config(const char* key, const char* value)
     }
 
     if (strcmp(key, IMGLIST_WWW_CACHE) == 0) {
-        ctx.www_cache = strdup(value);
+        ctx.www_cache_dir = strdup(value);
         return cfgst_ok;
     }
 
@@ -342,17 +385,37 @@ static enum config_status load_config(const char* key, const char* value)
 }
 
 struct ctx_curl_active_rq {
+    CURL* curl_handle;
+    char* mem_buf;
+    size_t mem_buf_sz;
+    bool copy_to_file;
     char download_fname[255];
     FILE* fp;
-    CURL* curl_handle;
 };
 struct ctx_curl_active_rq curl_active_rq;
 
 static size_t write_data(void *curl_fp, size_t size, size_t nmemb, void *usr)
 {
+  size_t chunk_sz = size * nmemb;
   struct ctx_curl_active_rq* ctx = usr;
-  size_t written = fwrite(curl_fp, size, nmemb, ctx->fp);
-  return written;
+  if (ctx->copy_to_file) {
+      size_t written = fwrite(curl_fp, size, nmemb, ctx->fp);
+      if (!written) {
+          fprintf(stderr, "Fail to download, can't write");
+      }
+  }
+  char* reallocd_mem = realloc(ctx->mem_buf, ctx->mem_buf_sz + chunk_sz + 1);
+  if (!reallocd_mem) {
+      fprintf(stderr, "Fail to download, bad alloc");
+      return 0;
+  }
+  ctx->mem_buf = reallocd_mem;
+  memcpy(&ctx->mem_buf[ctx->mem_buf_sz], curl_fp, chunk_sz);
+
+  ctx->mem_buf_sz = ctx->mem_buf_sz + chunk_sz;
+  ctx->mem_buf[ctx->mem_buf_sz] = 0;
+
+  return chunk_sz;
 }
 
 static void downloader_init(struct image_list* ctx)
@@ -364,6 +427,10 @@ static void downloader_init(struct image_list* ctx)
     curl_easy_setopt(curl_active_rq.curl_handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(curl_active_rq.curl_handle, CURLOPT_WRITEDATA, &curl_active_rq);
     curl_easy_setopt(curl_active_rq.curl_handle, CURLOPT_URL, ctx->www_url);
+
+    curl_active_rq.mem_buf = NULL;
+    curl_active_rq.mem_buf_sz = 0;
+    curl_active_rq.copy_to_file = false;
 }
 
 static void downloader_free()
@@ -376,7 +443,8 @@ static struct image* downloader_get_one(void* usr)
 {
     struct image_list* ctx = usr;
     size_t maybe_new_idx = ctx->index + 1;
-    snprintf(curl_active_rq.download_fname, 255, "%s/%ld_img.jpg", ctx->www_cache, maybe_new_idx);
+    snprintf(curl_active_rq.download_fname, 255, "%s/%ld_img.jpg",
+             ctx->www_cache_dir, maybe_new_idx);
     curl_active_rq.fp = fopen(curl_active_rq.download_fname, "wb");
     if (!curl_active_rq.fp) {
         fprintf(stderr, "Can't open '%s' to download from remote...\n", curl_active_rq.download_fname);
@@ -392,7 +460,13 @@ static struct image* downloader_get_one(void* usr)
 
       fclose(curl_active_rq.fp);
       ctx->index = maybe_new_idx;
-      struct image* img = image_from_file(curl_active_rq.download_fname);
+      // struct image* img = image_from_file(curl_active_rq.download_fname);
+      struct image* img = image_create("<mem>", (uint8_t*)curl_active_rq.mem_buf, curl_active_rq.mem_buf_sz);
+
+      free(curl_active_rq.mem_buf);
+      curl_active_rq.mem_buf_sz = 0;
+      curl_active_rq.mem_buf = NULL;
+
       if (!img) {
           printf("Fail to create img %s\n", curl_active_rq.download_fname);
           abort();
@@ -416,20 +490,22 @@ void image_list_free(void)
     image_prefetcher_free(&ctx.image_prefetcher);
     downloader_free();
 
-    clean_cache(ctx.www_cache);
+    clean_cache(ctx.www_cache_dir);
     image_free(ctx.no_img);
     free(ctx.www_url);
-    free(ctx.www_cache);
+    free(ctx.www_cache_dir);
 }
 
 bool image_list_scan(const char** files, size_t num)
 {
-  clean_cache(ctx.www_cache);
+    clean_cache(ctx.www_cache_dir);
 
-  if (!ctx.www_cache) {
-      fprintf(stderr, "Missing www_cache config entry; can't use www-source without cache location\n");
-      abort();
-  }
+    if (!ctx.www_cache_dir) {
+        fprintf(stderr,
+                "Missing www_cache config entry; can't use www-source without "
+                "cache location\n");
+        abort();
+    }
 
   if (!ctx.www_url) {
       fprintf(stderr, "Missing www_url config entry; can't use www-source without URL\n");
@@ -437,9 +513,10 @@ bool image_list_scan(const char** files, size_t num)
   }
 
   {
-      DIR* dirp = opendir(ctx.www_cache);
+      DIR* dirp = opendir(ctx.www_cache_dir);
       if (!dirp) {
-          fprintf(stderr, "Can't open www_cache directory '%s'\n", ctx.www_cache);
+          fprintf(stderr, "Can't open www_cache directory '%s'\n",
+                  ctx.www_cache_dir);
           perror("Can't open www_cache directory");
           abort();
       }
@@ -454,7 +531,7 @@ bool image_list_scan(const char** files, size_t num)
     ctx.current = ctx.no_img;
 
     downloader_init(&ctx);
-    image_prefetcher_start(&ctx.image_prefetcher);
+    image_prefetcher_start(&ctx.image_prefetcher, 10, 3);
 
     return true;
 }

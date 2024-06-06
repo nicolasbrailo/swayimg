@@ -25,7 +25,7 @@
  * @param size size of image data in bytes
  * @return image instance or NULL on errors
  */
-static struct image* image_create(const char* path, const uint8_t* data,
+struct image* image_create(const char* path, const uint8_t* data,
                                   size_t size)
 {
     struct image* ctx;
