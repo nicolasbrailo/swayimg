@@ -2,153 +2,137 @@
 // List of images.
 // Copyright (C) 2022 Artem Senichev <artemsen@gmail.com>
 
-#include "imagelist.h"
+#include "image.h"
 
-#include "buildcfg.h"
-#include "config.h"
-#include "str.h"
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <errno.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <curl/curl.h>
 
-static void clean_cache(const char *path) {
-    DIR *dirp = opendir(path);
-    if (!dirp) {
+/**
+ * Callback to fetch an image in-memory. Caller takes ownership of memory.
+ */
+typedef struct image* (*downloader_cb)(void*);
+// bg thread for the prefetcher
+static void* image_prefetcher_thread(void* usr);
+
+/**
+ * Prefetcher running state; the prefetcher will keep a list of images ready to
+ * be used, together with a history of the last N previously used images. It can
+ * be used to provide quick loading, but also a limited history to scroll back
+ * to.
+ */
+struct image_prefetcher_ctx {
+    downloader_cb downloader_impl; ///< Callback to fetch a picture
+    void* downloader_impl_usr;     ///< User data for callback
+
+    pthread_t thread;       ///< Background thread to invoke the cb
+    pthread_cond_t condvar; ///< Signal for the prefetcher thread to wakeup
+    pthread_mutex_t cv_mut; ///< Protects shared state of image ringbuffer
+
+    size_t image_cache_size;    ///< Maximum number of images to cache
+    struct image** image_cache; ///< Image ringbuffer
+    size_t image_cache_r;       ///< Ringbuffer read ptr
+    size_t image_cache_w;       ///< Ringbuffer write ptr
+    size_t prefetch_n;          ///< Number of images to prefetch
+};
+
+void image_prefetcher_init(struct image_prefetcher_ctx* ctx, downloader_cb cb,
+                           void* downloader_impl_usr)
+{
+    ctx->downloader_impl = cb;
+    ctx->downloader_impl_usr = downloader_impl_usr;
+
+    ctx->image_cache_size = 10; // TODO
+    ctx->image_cache_r = 0;
+    ctx->image_cache_w = 0;
+    ctx->prefetch_n = 3; // TODO
+    ctx->image_cache = malloc(sizeof(void*) * ctx->image_cache_size);
+    memset(ctx->image_cache, 0, sizeof(void*) * ctx->image_cache_size);
+
+    if (ctx->thread) {
+        fprintf(stderr, "Double init of image prefetcher requested\n");
+        abort();
+    }
+
+    if (pthread_cond_init(&ctx->condvar, NULL) != 0) {
+        perror("pthread_cond_init");
+        abort();
+    }
+
+    if (pthread_mutex_init(&ctx->cv_mut, NULL) != 0) {
+        perror("pthread_mutex_init");
+        abort();
+    }
+}
+
+/**
+ * Prefetcher is ready to start; this implies the downloader is also configured
+ * and ready to be invoked.
+ */
+void image_prefetcher_start(struct image_prefetcher_ctx* ctx)
+{
+    if (pthread_create(&ctx->thread, NULL, image_prefetcher_thread, ctx) != 0) {
+        perror("pthread_create");
+        abort();
+    }
+}
+
+#include <errno.h>
+void image_prefetcher_free(struct image_prefetcher_ctx* ctx)
+{
+    if (!ctx) {
         return;
     }
 
-    const size_t path_len = strlen(path);
-    struct dirent *dent;
-    while ((dent = readdir(dirp))) {
-        if ((strcmp(dent->d_name, ".") == 0) || (strcmp(dent->d_name, "..") == 0)) {
-            continue;
-        }
-
-        const size_t fpath_len = path_len + strlen(dent->d_name) + 2; // $BASE/$FNAME\0
-        char *fpath = malloc(fpath_len);
-        snprintf(fpath, fpath_len, "%s/%s", path, dent->d_name);
-        struct stat statbuf;
-        if (stat(fpath, &statbuf) == 0) {
-            if (S_ISDIR(statbuf.st_mode)) {
-                fprintf(stderr, "Found unexpected directory '%s' in cache path '%s'\n", fpath, path);
-            } else {
-                if (unlink(fpath) != 0) {
-                    fprintf(stderr, "Failed to clean cache file '%s'\n", fpath);
-                    perror("Can't delete file");
-                }
-            }
-        }
-        free(fpath);
-    }
-}
-
-
-typedef struct image* (*downloader_cb)(void*);
-
-struct image_prefetcher_ctx {
-    downloader_cb downloader_impl;
-    void* downloader_impl_usr;
-    pthread_t thread;
-    pthread_cond_t condvar;
-    pthread_mutex_t cv_mut;
-    bool shutdown_thread;
-    bool www_url_is_set;
-    size_t cache_limit;
-    struct image** image_cache;
-    size_t image_cache_size;
-    size_t prefetch_n;
-    size_t image_cache_r;
-    size_t image_cache_w;
-};
-
-static void* image_cache_thread(void* usr);
-
-void image_cache_init(struct image_prefetcher_ctx* ctx, downloader_cb cb,
-                      void* downloader_impl_usr)
-{
-    if (ctx->thread) {
-        fprintf(stderr, "Double init of image list requested\n");
-        abort();
+    if (pthread_cancel(ctx->thread) != 0) {
+        perror("pthread_cancel, threads may leak");
     }
 
-  ctx->downloader_impl = cb;
-  ctx->downloader_impl_usr = downloader_impl_usr;
-  ctx->image_cache_size = 10;
-  ctx->prefetch_n = 3;
-  ctx->image_cache_r = 0;
-  ctx->image_cache_w = 0;
-  ctx->image_cache = malloc(sizeof(void*) * ctx->image_cache_size);
-  memset(ctx->image_cache, 0, sizeof(void*) * ctx->image_cache_size);
-
-    if (pthread_cond_init(&ctx->condvar, NULL) != 0) {
-        perror("Fail pthread_cond_init");
-        abort();
+    if (pthread_join(ctx->thread, NULL) != 0) {
+        perror("pthread_join, threads may leak");
     }
-    if (pthread_mutex_init(&ctx->cv_mut, NULL) != 0) {
-        perror("Fail pthread_mutex_init");
-        abort();
-    }
-
-  if (pthread_create(&ctx->thread, NULL, image_cache_thread, ctx) != 0) {
-      perror("Fail pthread_create");
-      abort();
-  }
-}
-
-void image_cache_free(struct image_prefetcher_ctx* ctx)
-{
-    ctx->shutdown_thread = true;
-
-            if (pthread_cond_broadcast(&ctx->condvar) != 0) {
-                perror("pthread_cond_broadcast");
-            }
-
-
-    // TODO struct timespec timeout;
-    // TODO clock_gettime(CLOCK_MONOTONIC, &timeout);
-    // TODO timeout.tv_sec += 3;
-    // TODO const int thread_join_ret = pthread_timedjoin_np(ctx->thread, NULL, &timeout);
-    // TODO if (thread_join_ret == ETIMEDOUT) {
-    // TODO     printf("Timeout terminating downloader thread\n");
-    // TODO }
 
     if (pthread_cond_destroy(&ctx->condvar) != 0) {
-        perror("Fail pthread_cond_destroy");
+        perror("pthread_cond_destroy");
     }
-    if (pthread_mutex_destroy(&ctx->cv_mut) != 0) {
-        perror("Fail pthread_mutex_destroy");
+
+    // May return an error if thread is destroyed while locked
+    pthread_mutex_destroy(&ctx->cv_mut);
+
+    for (size_t i = 0; i < ctx->image_cache_size; ++i) {
+        image_free(ctx->image_cache[i]);
     }
 
     free(ctx->image_cache);
+    ctx->thread = 0;
 }
 
-void* image_cache_thread(void* usr)
+/** Image prefetching, background thread */
+void* image_prefetcher_thread(void* usr)
 {
     struct image_prefetcher_ctx* ctx = usr;
 
-    // Wait for cfg
-    bool cfg_ready = false;
-    while (!cfg_ready) {
-      pthread_mutex_lock(&ctx->cv_mut);
-      cfg_ready = ctx->www_url_is_set;
-      pthread_mutex_unlock(&ctx->cv_mut);
-      // TODO use a cv
-    }
-
-    while (!ctx->shutdown_thread) {
-        size_t cnt = (ctx->image_cache_w >= ctx->image_cache_r)?
-                        ctx->image_cache_w - ctx->image_cache_r :
-                        ctx->image_cache_w + ctx->image_cache_size - ctx->image_cache_r;
+    while (true) {
+        // Figure out how many images we need to prefetch. If the user requests
+        // a new image while we're prefetching this count will be less than it
+        // should be, but it will eventually catch up on the next wakeup (as
+        // long as prefetch num is high enough).
+        pthread_mutex_lock(&ctx->cv_mut);
+        const size_t cnt = (ctx->image_cache_w >= ctx->image_cache_r)
+            ? ctx->image_cache_w - ctx->image_cache_r
+            : ctx->image_cache_w + ctx->image_cache_size - ctx->image_cache_r;
+        pthread_mutex_unlock(&ctx->cv_mut);
 
         for (size_t i=cnt; i < ctx->prefetch_n; ++i) {
+            pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
+            // Download one (may be slow)
             struct image* img = ctx->downloader_impl(ctx->downloader_impl_usr);
+
+            // Critical section: update buffer
             pthread_mutex_lock(&ctx->cv_mut);
             struct image* old_img = ctx->image_cache[ctx->image_cache_w];
             ctx->image_cache[ctx->image_cache_w] = img;
@@ -156,10 +140,14 @@ void* image_cache_thread(void* usr)
                 (ctx->image_cache_w + 1) % ctx->image_cache_size;
             pthread_mutex_unlock(&ctx->cv_mut);
 
+            // If the old position in the ringbuffer had an image, relase it
             if (old_img) {
-                printf("Expiring cached image from cache[%lu] = %p\n", ctx->image_cache_w, (void*)ctx->image_cache[ctx->image_cache_w]);
+                printf("Expiring cached image [%lu] = %p\n", ctx->image_cache_w,
+                       (void*)old_img);
                 image_free(old_img);
-              }
+            }
+
+            pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
         }
 
         pthread_mutex_lock(&ctx->cv_mut);
@@ -170,51 +158,118 @@ void* image_cache_thread(void* usr)
     return NULL;
 }
 
-static struct image* jump_next(struct image_prefetcher_ctx* ctx)
+/**
+ * Return the next image in the cache.
+ * If no image is avaialble in the cache (eg requesting beyond the prefetched
+ * limit, before the background thread has had a chance to catch up) it will
+ * return NULL. The ownership of the memory is retained by the prefetcher, the
+ * caller shouldn't free this image.
+ */
+static struct image*
+image_prefetcher_jump_next(struct image_prefetcher_ctx* ctx)
 {
     bool can_move = false;
+
     pthread_mutex_lock(&ctx->cv_mut);
-    size_t next_idx = (ctx->image_cache_r + 1) % ctx->image_cache_size;
+    const size_t next_idx = (ctx->image_cache_r + 1) % ctx->image_cache_size;
     if (ctx->image_cache_w == ctx->image_cache_r) {
-        printf("No images, cache empty\n");
+        printf("No more images available, cache empty.\n");
     } else if (!ctx->image_cache[next_idx]) {
-        printf("Fail reading NEXT file: cache R %lu=%p, W=%lu\n",
-               ctx->image_cache_r, (void*)ctx->image_cache[ctx->image_cache_r],
-               ctx->image_cache_w);
+        // This shouldn't happen
+        fprintf(
+            stderr,
+            "BUG! Race reading next image: cache R=%lu=%p, N=%lu=%p, W=%lu\n",
+            ctx->image_cache_r, (void*)ctx->image_cache[ctx->image_cache_r],
+            next_idx, (void*)ctx->image_cache[next_idx], ctx->image_cache_w);
     } else {
-        printf("NEXT file: Set ptr to next image from cache R idx %lu = %p\n",
-               ctx->image_cache_r, (void*)ctx->image_cache[ctx->image_cache_r]);
         ctx->image_cache_r = next_idx;
         can_move = true;
     }
     pthread_mutex_unlock(&ctx->cv_mut);
+
+    // Wake up the background thread (it may or may not need to download new
+    // files)
     if (pthread_cond_broadcast(&ctx->condvar) != 0) {
         perror("pthread_cond_broadcast");
     }
-    return can_move ? ctx->image_cache[ctx->image_cache_r] : NULL;
+
+    return can_move ? ctx->image_cache[next_idx] : NULL;
 }
 
-static struct image* jump_prev(struct image_prefetcher_ctx* ctx)
+/**
+ * Move back one image in the history. Returns null if no more images are
+ * available (ie reached the first cached image).
+ */
+static struct image*
+image_prefetcher_jump_prev(struct image_prefetcher_ctx* ctx)
 {
     pthread_mutex_lock(&ctx->cv_mut);
-    size_t maybe_prev = ctx->image_cache_r == 0 ? ctx->image_cache_size - 1
-                                                : ctx->image_cache_r - 1;
+    const size_t maybe_prev = ctx->image_cache_r == 0
+        ? ctx->image_cache_size - 1
+        : ctx->image_cache_r - 1;
     if (maybe_prev == ctx->image_cache_w || !ctx->image_cache[maybe_prev]) {
-        printf("No more history\n");
+        printf("No more images available, reached oldest image in history.\n");
         pthread_mutex_unlock(&ctx->cv_mut);
-        if (pthread_cond_broadcast(&ctx->condvar) != 0) {
-            perror("pthread_cond_broadcast");
-        }
         return NULL;
     }
+
     ctx->image_cache_r = maybe_prev;
-    printf("Prev file: Read image from cache R idx %lu = (void*)%p\n",
-           ctx->image_cache_r, (void*)ctx->image_cache[ctx->image_cache_r]);
     pthread_mutex_unlock(&ctx->cv_mut);
-    if (pthread_cond_broadcast(&ctx->condvar) != 0) {
-        perror("pthread_cond_broadcast");
+
+    // We don't signal the condvar because it should never be necessary to
+    // prefetch a new image
+    return ctx->image_cache[maybe_prev];
+}
+
+#include "buildcfg.h"
+#include "config.h"
+#include "imagelist.h"
+#include "str.h"
+
+#include <curl/curl.h>
+#include <dirent.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static void clean_cache(const char* path)
+{
+    DIR* dirp = opendir(path);
+    if (!dirp) {
+        return;
     }
-    return ctx->image_cache[ctx->image_cache_r];
+
+    const size_t path_len = strlen(path);
+    struct dirent* dent;
+    while ((dent = readdir(dirp))) {
+        if ((strcmp(dent->d_name, ".") == 0) ||
+            (strcmp(dent->d_name, "..") == 0)) {
+            continue;
+        }
+
+        const size_t fpath_len =
+            path_len + strlen(dent->d_name) + 2; // $BASE/$FNAME\0
+        char* fpath = malloc(fpath_len);
+        snprintf(fpath, fpath_len, "%s/%s", path, dent->d_name);
+        struct stat statbuf;
+        if (stat(fpath, &statbuf) == 0) {
+            if (S_ISDIR(statbuf.st_mode)) {
+                fprintf(stderr,
+                        "Found unexpected directory '%s' in cache path '%s'\n",
+                        fpath, path);
+            } else {
+                if (unlink(fpath) != 0) {
+                    fprintf(stderr, "Failed to clean cache file '%s'\n", fpath);
+                    perror("Can't delete file");
+                }
+            }
+        }
+        free(fpath);
+    }
 }
 
 struct image_list {
@@ -235,11 +290,8 @@ static struct image_list ctx = {
     .image_prefetcher = {
         .downloader_impl = NULL,
         .downloader_impl_usr = NULL,
-        .cache_limit = 10,
-        .www_url_is_set = false,
+        .image_cache_size = 10,
         .image_cache = NULL,
-        .shutdown_thread = false,
-        .image_cache_size = 0,
         .prefetch_n = 3,
         .image_cache_r = 0,
         .image_cache_w = 0,
@@ -271,7 +323,7 @@ static enum config_status load_config(const char* key, const char* value)
     if (strcmp(key, IMGLIST_WWW_CACHE_LIMIT) == 0) {
         long num = 0;
         if (str_to_num(value, 0, &num, 0) && num > 0) {
-            ctx.image_prefetcher.cache_limit = num;
+            ctx.image_prefetcher.image_cache_size = num;
             return cfgst_ok;
         }
         return cfgst_invalid_value;
@@ -355,13 +407,13 @@ void image_list_init()
 {
     // register configuration loader
     config_add_loader(IMGLIST_CFG_SECTION, load_config);
-    image_cache_init(&ctx.image_prefetcher, downloader_get_one, &ctx);
+    image_prefetcher_init(&ctx.image_prefetcher, downloader_get_one, &ctx);
 }
 
 void image_list_free(void)
 {
 
-    image_cache_free(&ctx.image_prefetcher);
+    image_prefetcher_free(&ctx.image_prefetcher);
     downloader_free();
 
     clean_cache(ctx.www_cache);
@@ -402,9 +454,7 @@ bool image_list_scan(const char** files, size_t num)
     ctx.current = ctx.no_img;
 
     downloader_init(&ctx);
-    pthread_mutex_lock(&ctx.image_prefetcher.cv_mut);
-    ctx.image_prefetcher.www_url_is_set = true;
-    pthread_mutex_unlock(&ctx.image_prefetcher.cv_mut);
+    image_prefetcher_start(&ctx.image_prefetcher);
 
     return true;
 }
@@ -443,11 +493,11 @@ bool image_list_jump(enum list_jump jump)
       case jump_prev_dir: // fallthrough
           return false;
       case jump_next_file:
-          img = jump_next(&ctx.image_prefetcher);
+          img = image_prefetcher_jump_next(&ctx.image_prefetcher);
           ctx.current = img ? img : ctx.no_img;
           return img != NULL;
       case jump_prev_file:
-          img = jump_prev(&ctx.image_prefetcher);
+          img = image_prefetcher_jump_prev(&ctx.image_prefetcher);
           ctx.current = img ? img : ctx.no_img;
           return img != NULL;
     }
