@@ -45,6 +45,17 @@ char* str_append(const char* src, size_t len, char** dst);
 bool str_to_num(const char* text, size_t len, ssize_t* value, int base);
 
 /**
+ * Convert text string to bool. Recognizes 'true', 'false' (case sensitive) or
+ * an int (0 == false)
+ * @param text text to convert
+ * @param len length of the source string (0=auto)
+ * @param value output variable
+ * @param base numeric base
+ * @return false if text has invalid format
+ */
+bool str_to_bool(const char* text, size_t len, bool* value);
+
+/**
  * Convert ansi string to wide char format.
  * @param src source string to encode
  * @param dst pointer to destination buffer

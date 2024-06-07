@@ -19,10 +19,13 @@
 #define IMGLIST_SRC             "source"
 #define IMGLIST_SRC_LOCALFS     "localfs"
 #define IMGLIST_SRC_WWW         "www"
+#define IMGLIST_NO_IMAGE_ICON     "no_image_asset"
 #define IMGLIST_WWW_URL         "www_url"
 #define IMGLIST_WWW_CACHE       "www_cache"
 #define IMGLIST_WWW_CACHE_LIMIT "www_cache_limit"
 #define IMGLIST_WWW_PREFETCH_N  "www_prefetch_n"
+#define IMGLIST_WWW_SAVE_TO_FILE  "www_save_to_file"
+#define IMGLIST_WWW_CLEANUP_CACHE "www_cleanup_cache"
 
 /** Image entry. */
 struct image_entry {

@@ -72,6 +72,24 @@ bool str_to_num(const char* text, size_t len, ssize_t* value, int base)
     return false;
 }
 
+bool str_to_bool(const char* text, size_t len, bool* value)
+{
+    if (strcmp(text, "true") == 0) {
+        *value = true;
+        return true;
+    }
+    if (strcmp(text, "false") == 0) {
+        *value = false;
+        return true;
+    }
+    ssize_t numval;
+    const bool ret = str_to_num(text, len, &numval, 10);
+    if (ret) {
+        *value = (numval != 0);
+    }
+    return ret;
+}
+
 wchar_t* str_to_wide(const char* src, wchar_t** dst)
 {
     wchar_t* buffer;

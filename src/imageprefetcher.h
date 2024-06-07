@@ -6,6 +6,8 @@
 //
 // Copyright (C) 2022 Artem Senichev <artemsen@gmail.com>
 
+#pragma once
+
 #include <stdbool.h>
 #include <stddef.h>
 

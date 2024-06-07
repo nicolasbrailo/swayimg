@@ -154,6 +154,7 @@ sources = [
   'src/font.c',
   'src/image.c',
   'src/imagelist.c',
+  'src/imagedownloader.c',
   'src/imageprefetcher.c',
   'src/info.c',
   'src/keybind.c',
