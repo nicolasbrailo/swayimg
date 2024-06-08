@@ -53,6 +53,7 @@ struct ui {
         struct wl_seat* seat;
         struct wl_keyboard* keyboard;
         struct wl_pointer* pointer;
+        struct wl_touch* touch;
         struct wl_surface* surface;
         struct wl_output* output;
     } wl;
@@ -285,6 +286,7 @@ static void on_keyboard_key(void* data, struct wl_keyboard* wl_keyboard,
                             uint32_t serial, uint32_t time, uint32_t key,
                             uint32_t state)
 {
+    printf("on_keyboard_key\n");
     struct itimerspec ts = { 0 };
 
     if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
@@ -313,17 +315,20 @@ static void on_pointer_enter(void* data, struct wl_pointer* wl_pointer,
                              uint32_t serial, struct wl_surface* surface,
                              wl_fixed_t surface_x, wl_fixed_t surface_y)
 {
+    printf("on_pointer_enter\n");
 }
 
 static void on_pointer_leave(void* data, struct wl_pointer* wl_pointer,
                              uint32_t serial, struct wl_surface* surface)
 {
+    printf("on_pointer_leave\n");
 }
 
 static void on_pointer_motion(void* data, struct wl_pointer* wl_pointer,
                               uint32_t time, wl_fixed_t surface_x,
                               wl_fixed_t surface_y)
 {
+    printf("on_pointer_motion\n");
     const int x = wl_fixed_to_int(surface_x);
     const int y = wl_fixed_to_int(surface_y);
 
@@ -360,6 +365,15 @@ static void on_pointer_axis(void* data, struct wl_pointer* wl_pointer,
     viewer_on_keyboard(key, keybind_mods(ctx.xkb.state));
 }
 
+
+static void wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) { printf("wl_touch_down\n"); }
+static void wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, int32_t id) { printf("wl_touch_up\n"); }
+static void wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) { printf("wl_touch_motion\n"); }
+static void wl_touch_frame(void *data, struct wl_touch *wl_touch) { printf("wl_touch_frame\n"); }
+static void wl_touch_cancel(void *data, struct wl_touch *wl_touch) { printf("wl_touch_cancel\n"); }
+static void wl_touch_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor) { printf("wl_touch_shape\n"); }
+static void wl_touch_orientation(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t orientation) { printf("wl_touch_orientation\n"); }
+
 static const struct wl_keyboard_listener keyboard_listener = {
     .keymap = on_keyboard_keymap,
     .enter = on_keyboard_enter,
@@ -375,6 +389,16 @@ static const struct wl_pointer_listener pointer_listener = {
     .motion = on_pointer_motion,
     .button = on_pointer_button,
     .axis = on_pointer_axis,
+};
+
+static const struct wl_touch_listener touch_listener = {
+    .down = wl_touch_down,
+    .up = wl_touch_up,
+    .motion = wl_touch_motion,
+    .frame = wl_touch_frame,
+    .cancel = wl_touch_cancel,
+    .shape = wl_touch_shape,
+    .orientation = wl_touch_orientation,
 };
 
 /*******************************************************************************
@@ -398,6 +422,14 @@ static void on_seat_capabilities(void* data, struct wl_seat* seat, uint32_t cap)
     } else if (ctx.wl.pointer) {
         wl_pointer_destroy(ctx.wl.pointer);
         ctx.wl.pointer = NULL;
+    }
+
+    if (cap & WL_SEAT_CAPABILITY_TOUCH) {
+        ctx.wl.touch = wl_seat_get_touch(seat);
+        wl_touch_add_listener(ctx.wl.touch, &touch_listener, NULL);
+    } else if (ctx.wl.touch) {
+        wl_touch_release(ctx.wl.touch);
+        ctx.wl.touch = NULL;
     }
 }
 
@@ -730,6 +762,9 @@ void ui_free(void)
     }
     if (ctx.wl.pointer) {
         wl_pointer_destroy(ctx.wl.pointer);
+    }
+    if (ctx.wl.touch) {
+        wl_touch_destroy(ctx.wl.touch);
     }
     if (ctx.wl.shm) {
         wl_shm_destroy(ctx.wl.shm);
