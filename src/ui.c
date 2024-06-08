@@ -315,20 +315,17 @@ static void on_pointer_enter(void* data, struct wl_pointer* wl_pointer,
                              uint32_t serial, struct wl_surface* surface,
                              wl_fixed_t surface_x, wl_fixed_t surface_y)
 {
-    printf("on_pointer_enter\n");
 }
 
 static void on_pointer_leave(void* data, struct wl_pointer* wl_pointer,
                              uint32_t serial, struct wl_surface* surface)
 {
-    printf("on_pointer_leave\n");
 }
 
 static void on_pointer_motion(void* data, struct wl_pointer* wl_pointer,
                               uint32_t time, wl_fixed_t surface_x,
                               wl_fixed_t surface_y)
 {
-    printf("on_pointer_motion\n");
     const int x = wl_fixed_to_int(surface_x);
     const int y = wl_fixed_to_int(surface_y);
 
@@ -365,14 +362,44 @@ static void on_pointer_axis(void* data, struct wl_pointer* wl_pointer,
     viewer_on_keyboard(key, keybind_mods(ctx.xkb.state));
 }
 
+struct wl_touch_state {
+    int start_x;
+    int start_y;
+    int end_x;
+    int end_y;
+} touch_state;
 
-static void wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) { printf("wl_touch_down\n"); }
-static void wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, int32_t id) { printf("wl_touch_up\n"); }
-static void wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) { printf("wl_touch_motion\n"); }
-static void wl_touch_frame(void *data, struct wl_touch *wl_touch) { printf("wl_touch_frame\n"); }
-static void wl_touch_cancel(void *data, struct wl_touch *wl_touch) { printf("wl_touch_cancel\n"); }
-static void wl_touch_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor) { printf("wl_touch_shape\n"); }
-static void wl_touch_orientation(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t orientation) { printf("wl_touch_orientation\n"); }
+static void wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    touch_state.start_x = x;
+    touch_state.start_y = y;
+}
+static void wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial, uint32_t time, int32_t id) {
+    int dx = touch_state.end_x - touch_state.start_x;
+    int dy = touch_state.end_y - touch_state.start_y;
+#define TOUCH_MOVE_MIN 3000
+    if (abs(dx) < TOUCH_MOVE_MIN) {
+        dx = 0;
+    }
+    if (abs(dy) < TOUCH_MOVE_MIN) {
+        dy = 0;
+    }
+
+    if (dx > 0) {
+        viewer_on_keyboard(XKB_KEY_SunPageUp, 0);
+    } else if (dx < 0) {
+        viewer_on_keyboard(XKB_KEY_SunPageDown, 0);
+    }
+
+    // TODO touch to show metadata
+}
+static void wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    touch_state.end_x = x;
+    touch_state.end_y = y;
+}
+static void wl_touch_frame(void *data, struct wl_touch *wl_touch) {}
+static void wl_touch_cancel(void *data, struct wl_touch *wl_touch) {}
+static void wl_touch_shape(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t major, wl_fixed_t minor) {}
+static void wl_touch_orientation(void *data, struct wl_touch *wl_touch, int32_t id, wl_fixed_t orientation) {}
 
 static const struct wl_keyboard_listener keyboard_listener = {
     .keymap = on_keyboard_keymap,

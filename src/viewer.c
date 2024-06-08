@@ -497,6 +497,7 @@ void viewer_on_keyboard(xkb_keysym_t key, uint8_t mods)
             redraw = next_file(jump_next_dir);
             break;
         case kb_prev_file:
+            printf("HOA\n");
             redraw = next_file(jump_prev_file);
             break;
         case kb_next_file:
