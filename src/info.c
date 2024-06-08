@@ -397,7 +397,7 @@ void info_update(size_t frame_idx)
     const struct image* image = entry.image;
     char buffer[64];
 
-    if (ctx.file != image->file_path) {
+    if (ctx.file != image->file_path || strcmp(image->file_path, "<mem>") == 0) {
         if (is_visible(info_file_name)) {
             update_field(image->file_name, &ctx.fields[info_file_name].value);
         }
@@ -433,10 +433,12 @@ void info_update(size_t frame_idx)
     }
 
     if (is_visible(info_index) && ctx.index != entry.index) {
-        ctx.index = entry.index;
-        snprintf(buffer, sizeof(buffer), "%lu of %lu", ctx.index + 1,
-                 image_list_size());
-        update_field(buffer, &ctx.fields[info_index].value);
+        if (image_list_size() != (size_t)-1) {
+            ctx.index = entry.index;
+            snprintf(buffer, sizeof(buffer), "%lu of %lu", ctx.index + 1,
+                     image_list_size());
+            update_field(buffer, &ctx.fields[info_index].value);
+        }
     }
 
     if (is_visible(info_scale)) {
