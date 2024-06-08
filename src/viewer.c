@@ -34,13 +34,30 @@ struct viewer {
     bool slideshow_enable; ///< Slideshow enable/disable
     int slideshow_fd;      ///< Slideshow timer
     size_t slideshow_time; ///< Slideshow image display time (seconds)
+
+    bool info_timedout; ///< Indicates the info blocks timedout and shouldn't be
+                        ///< displayed
+    int info_timeout_fd;      ///< Info timeout timer
+    bool info_timeout_is_rel; ///< If true, timeout_time is calculated as a
+                              ///< percent of slideshow_time
+    size_t info_timeout_time; ///< Info timeout time (seconds)
+
+    char* info_block_from_sys_cmd;
+    enum info_position info_block_from_sys_cmd_position;
 };
 
 static struct viewer ctx = { .animation_enable = true,
                              .animation_fd = -1,
                              .slideshow_enable = false,
                              .slideshow_fd = -1,
-                             .slideshow_time = 3 };
+                             .slideshow_time = 3,
+                             .info_timeout_fd = -1,
+                             .info_timeout_is_rel = false,
+                             .info_timeout_time = 0,
+                             .info_timedout = false,
+                             .info_block_from_sys_cmd = NULL,
+                             .info_block_from_sys_cmd_position =
+                                 info_bottom_left };
 
 static void switch_help(void)
 {
@@ -119,14 +136,14 @@ static void animation_ctl(bool enable)
  */
 static void slideshow_ctl(bool enable)
 {
-    struct itimerspec ts = { 0 };
+    struct itimerspec slideshow_ts = { 0 };
 
     ctx.slideshow_enable = enable;
     if (enable) {
-        ts.it_value.tv_sec = ctx.slideshow_time;
+        slideshow_ts.it_value.tv_sec = ctx.slideshow_time;
     }
 
-    timerfd_settime(ctx.slideshow_fd, 0, &ts, NULL);
+    timerfd_settime(ctx.slideshow_fd, 0, &slideshow_ts, NULL);
 }
 
 /**
@@ -248,7 +265,32 @@ static void on_animation_timer(void)
  */
 static void on_slideshow_timer(void)
 {
+    // Set timeout for info block
+    ctx.info_timedout = false;
+    if (ctx.info_timeout_time) {
+        struct itimerspec info_ts = { 0 };
+        if (ctx.info_timeout_is_rel) {
+            info_ts.it_value.tv_sec =
+                ctx.slideshow_time * ctx.info_timeout_time / 100;
+        } else {
+            info_ts.it_value.tv_sec = ctx.info_timeout_time;
+        }
+        timerfd_settime(ctx.info_timeout_fd, 0, &info_ts, NULL);
+    }
+
     slideshow_ctl(next_file(jump_next_file));
+    ui_redraw();
+}
+
+/**
+ * Slideshow timer event handler.
+ */
+static void on_info_block_timeout(void)
+{
+    // Reset timer to 0, so it won't fire again
+    struct itimerspec info_ts = { 0 };
+    timerfd_settime(ctx.info_timeout_fd, 0, &info_ts, NULL);
+    ctx.info_timedout = true;
     ui_redraw();
 }
 
@@ -268,6 +310,38 @@ static enum config_status load_config(const char* key, const char* value)
         if (str_to_num(value, 0, &num, 0) && num != 0 && num <= 86400) {
             ctx.slideshow_time = num;
             status = cfgst_ok;
+        } else {
+            status = cfgst_invalid_value;
+        }
+    } else if (strcmp(key, VIEWER_CFG_INFO_TIMEOUT) == 0) {
+        size_t val_sz = strlen(value);
+        ctx.info_timeout_is_rel = false;
+        if (value[val_sz - 1] == '%') {
+            val_sz = val_sz - 1;
+            ctx.info_timeout_is_rel = true;
+        }
+
+        ssize_t num;
+        const ssize_t maxVal = ctx.info_timeout_is_rel ? 100 : 86400;
+        if (str_to_num(value, val_sz, &num, 0) && num != 0 && num <= maxVal) {
+            ctx.info_timeout_time = num;
+            status = cfgst_ok;
+        } else {
+            status = cfgst_invalid_value;
+        }
+    } else if (strcmp(key, VIEWER_DISPLAY_SYSTEM_CMD) == 0) {
+        ctx.info_block_from_sys_cmd = strdup(value);
+        status = cfgst_ok;
+    } else if (strcmp(key, VIEWER_DISPLAY_SYSTEM_CMD_POS) == 0) {
+        status = cfgst_ok;
+        if (strcmp(value, "top_left") == 0) {
+            ctx.info_block_from_sys_cmd_position = info_top_left;
+        } else if (strcmp(value, "top_right") == 0) {
+            ctx.info_block_from_sys_cmd_position = info_top_right;
+        } else if (strcmp(value, "bottom_left") == 0) {
+            ctx.info_block_from_sys_cmd_position = info_bottom_left;
+        } else if (strcmp(value, "bottom_right") == 0) {
+            ctx.info_block_from_sys_cmd_position = info_bottom_right;
         } else {
             status = cfgst_invalid_value;
         }
@@ -292,6 +366,13 @@ void viewer_init(void)
         ui_add_event(ctx.slideshow_fd, on_slideshow_timer);
     }
 
+    // setup info block timer
+    ctx.info_timeout_fd =
+        timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (ctx.info_timeout_fd != -1) {
+        ui_add_event(ctx.info_timeout_fd, on_info_block_timeout);
+    }
+
     // register configuration loader
     config_add_loader(GENERAL_CONFIG_SECTION, load_config);
 }
@@ -306,6 +387,9 @@ void viewer_free(void)
     }
     if (ctx.slideshow_fd != -1) {
         close(ctx.slideshow_fd);
+    }
+    if (ctx.info_timeout_fd != -1) {
+        close(ctx.info_timeout_fd);
     }
 }
 
@@ -330,14 +414,25 @@ void viewer_on_redraw(struct pixmap* window)
     canvas_draw_image(window, entry.image, ctx.frame);
 
     // put text info blocks on window surface
-    for (size_t i = 0; i < INFO_POSITION_NUM; ++i) {
-        const size_t lines_num = info_height(i);
-        if (lines_num) {
-            const enum info_position pos = (enum info_position)i;
-            const struct info_line* lines = info_lines(pos);
-            const struct block_background* bg = info_get_background();
-            canvas_draw_text(window, pos, lines, lines_num, bg);
+    if (!ctx.info_timedout) {
+        for (size_t i = 0; i < INFO_POSITION_NUM; ++i) {
+            const size_t lines_num = info_height(i);
+            if (lines_num) {
+                const enum info_position pos = (enum info_position)i;
+                const struct info_line* lines = info_lines(pos);
+                const struct block_background* bg = info_get_background();
+                canvas_draw_text(window, pos, lines, lines_num, bg);
+            }
         }
+    }
+
+    if (ctx.info_block_from_sys_cmd) {
+        // TODO const size_t lines_num = // TODO info_height(i); ->
+        // execute_command
+        // TODO const struct info_line* lines = // TODO info_lines(pos);
+        // TODO const struct block_background* bg = info_get_background();
+        // TODO canvas_draw_text(window, ctx.info_block_from_sys_cmd_position,
+        // lines, lines_num, bg);
     }
 
     if (ctx.help) {

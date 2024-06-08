@@ -10,6 +10,9 @@
 // Configuration parameters
 #define VIEWER_CFG_SLIDESHOW      "slideshow"
 #define VIEWER_CFG_SLIDESHOW_TIME "slideshow_time"
+#define VIEWER_CFG_INFO_TIMEOUT       "image_info_timeout"
+#define VIEWER_DISPLAY_SYSTEM_CMD     "show_system_cmd"
+#define VIEWER_DISPLAY_SYSTEM_CMD_POS "show_system_cmd_pos"
 
 /**
  * Initialize viewer context.
