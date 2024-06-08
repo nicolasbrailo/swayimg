@@ -155,10 +155,22 @@ static void reset_state(void)
     const struct pixmap* pm = &entry.image->frames[0].pm;
 
     ctx.frame = 0;
+    ctx.info_timedout = false;
     canvas_reset_image(pm->width, pm->height);
     ui_set_title(entry.image->file_name);
     animation_ctl(true);
     slideshow_ctl(ctx.slideshow_enable);
+
+    // Set timeout for info block
+    if (ctx.info_timeout_time) {
+        struct itimerspec info_ts = { 0 };
+        if (ctx.info_timeout_is_rel) {
+            info_ts.it_value.tv_sec = ctx.slideshow_time * ctx.info_timeout_time / 100;
+        } else {
+            info_ts.it_value.tv_sec = ctx.info_timeout_time;
+        }
+        timerfd_settime(ctx.info_timeout_fd, 0, &info_ts, NULL);
+    }
 }
 
 /**
