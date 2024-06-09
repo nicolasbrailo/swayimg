@@ -429,7 +429,6 @@ void viewer_on_redraw(struct pixmap* window)
     if (!ctx.info_timedout) {
         for (size_t i = 0; i < INFO_POSITION_NUM; ++i) {
             const size_t lines_num = info_height(i);
-            printf("%d\n", lines_num);
             if (lines_num) {
                 const enum info_position pos = (enum info_position)i;
                 const struct info_line* lines = info_lines(pos);
@@ -498,7 +497,6 @@ void viewer_on_keyboard(xkb_keysym_t key, uint8_t mods)
             redraw = next_file(jump_next_dir);
             break;
         case kb_prev_file:
-            printf("HOA\n");
             redraw = next_file(jump_prev_file);
             break;
         case kb_next_file:

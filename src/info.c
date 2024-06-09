@@ -515,16 +515,19 @@ size_t info_height(enum info_position pos)
                 lines_num += ctx.exif_num;
                 break;
             case info_frame:
+                return 0;
                 if (ctx.frame_total == 1) {
                     --lines_num;
                 }
                 break;
             case info_status:
+                return 0;
                 if (!ctx.fields[info_status].value.data) {
                     --lines_num;
                 }
                 break;
             case info_index:
+                return 0;
                 if (image_list_size() == 1) {
                     --lines_num;
                 }

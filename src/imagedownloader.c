@@ -107,6 +107,7 @@ struct downloader_ctx* downloader_init(const char* www_url,
         return NULL;
     }
 
+    ctx->img_download_cnt = 0;
     ctx->mem_buf = NULL;
     ctx->mem_buf_sz = 0;
     ctx->curl_handle = NULL;
