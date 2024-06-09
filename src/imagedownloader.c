@@ -48,6 +48,8 @@ static void clean_cache(const char* path)
         }
         free(fpath);
     }
+
+    closedir(dirp);
 }
 
 struct downloader_ctx {
