@@ -79,9 +79,9 @@ struct downloader_ctx* downloader_init(const char* www_url,
         {
             DIR* dirp = opendir(www_cache_dir);
             if (!dirp) {
-                perror("opendir");
                 fprintf(stderr, "Can't open www_cache directory '%s'\n",
                         www_cache_dir);
+                perror("opendir");
                 return NULL;
             }
             closedir(dirp);
@@ -98,6 +98,12 @@ struct downloader_ctx* downloader_init(const char* www_url,
         return NULL;
     }
 
+    ctx->img_download_cnt = 0;
+    ctx->mem_buf = NULL;
+    ctx->mem_buf_sz = 0;
+    ctx->curl_handle = NULL;
+    ctx->clean_cache_after_use = false;
+
     ctx->www_url = strdup(www_url);
     ctx->www_cache_dir = www_cache_dir ? strdup(www_cache_dir) : NULL;
     ctx->clean_cache_after_use = clean_cache_after_use;
@@ -106,11 +112,6 @@ struct downloader_ctx* downloader_init(const char* www_url,
         downloader_free(ctx);
         return NULL;
     }
-
-    ctx->img_download_cnt = 0;
-    ctx->mem_buf = NULL;
-    ctx->mem_buf_sz = 0;
-    ctx->curl_handle = NULL;
 
     {
         const int ret = curl_global_init(CURL_GLOBAL_ALL);
@@ -147,6 +148,10 @@ struct downloader_ctx* downloader_init(const char* www_url,
 
 void downloader_free(struct downloader_ctx* ctx)
 {
+    if (!ctx) {
+        return;
+    }
+
     if (ctx->curl_handle) {
         curl_easy_cleanup(ctx->curl_handle);
     }
