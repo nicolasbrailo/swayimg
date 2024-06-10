@@ -103,11 +103,12 @@ struct downloader_ctx* downloader_init(const char* www_url,
     ctx->mem_buf_sz = 0;
     ctx->curl_handle = NULL;
     ctx->clean_cache_after_use = false;
+    ctx->fp = NULL;
 
     ctx->www_url = strdup(www_url);
     ctx->www_cache_dir = www_cache_dir ? strdup(www_cache_dir) : NULL;
     ctx->clean_cache_after_use = clean_cache_after_use;
-    if (!ctx->www_url || !ctx->www_cache_dir) {
+    if (!ctx->www_url || (!ctx->www_cache_dir && www_cache_dir)) {
         fprintf(stderr, "bad alloc\n");
         downloader_free(ctx);
         return NULL;
