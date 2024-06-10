@@ -59,6 +59,18 @@ enum loader_status decode_jpeg(struct image* ctx, const uint8_t* data,
     jpeg_create_decompress(&jpg);
     jpeg_mem_src(&jpg, data, size);
     jpeg_read_header(&jpg, TRUE);
+
+    // TODO
+    unsigned tgt_w = 1920;
+    unsigned tgt_h = 1080;
+    while (tgt_w < jpg.image_width / jpg.scale_denom || tgt_h < jpg.image_height / jpg.scale_denom) {
+        jpg.scale_denom++;
+    }
+    if (jpg.scale_denom > 1) {
+        jpg.scale_denom--;
+    }
+    printf("XXXX Scale to s=%du %dux%du\n", jpg.scale_denom, jpg.image_width / jpg.scale_denom, jpg.image_height / jpg.scale_denom);
+
     jpeg_start_decompress(&jpg);
 #ifdef LIBJPEG_TURBO_VERSION
     jpg.out_color_space = JCS_EXT_BGRA;

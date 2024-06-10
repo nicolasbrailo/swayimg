@@ -1,0 +1,9 @@
+* Crash when www dir not configured
+* Test with failed to decode images
+* Show arbitrary system command in info box
+* Metadata box border is wonky
+* Metadata should have alpha
+* Add mode to fill background with zoomed in greyd out version of curr picture
+* Show metadata again on click
+* Geotag metadata
+* Add -Wshadow to build
